@@ -1,0 +1,24 @@
+name: gitleaks
+
+# Secret/token leak backstop for this PUBLIC fork. Catches bearer/access tokens
+# and JWTs before they land. PII discipline (no account email / userId / Pod
+# serial in committed fixtures; never commit live-curl output) is enforced by
+# convention + review; this job is the automated secret gate.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITLEAKS_CONFIG: .gitleaks.toml
