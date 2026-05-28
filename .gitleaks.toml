@@ -1,0 +1,25 @@
+title = "eight_sleep fork secret/PII scan"
+
+# Build on gitleaks' default ruleset, then add Eight-Sleep-specific token rules
+# and allowlist the maintainer's intended public identity + obvious sample data.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "jwt"
+description = "JWT (Eight Sleep access / refresh token shape)"
+regex = '''eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'''
+
+[[rules]]
+id = "eight-sleep-token-assignment"
+description = "Eight Sleep / 8slp token assigned to a long string literal"
+regex = '''(?i)(8slp|eight[_-]?sleep)[^\n]{0,40}(bearer|access[_-]?token|refresh[_-]?token|api[_-]?key)["'\s:=]{1,6}[A-Za-z0-9._\-]{16,}'''
+
+[allowlist]
+description = "Intended public identity and clearly-synthetic sample data"
+regexes = [
+  '''github@skyeckstrom\.com''',
+  '''(?i)@?example\.(com|org|net)''',
+  '''0{8}-0{4}-0{4}-0{4}-0{12}''',
+]

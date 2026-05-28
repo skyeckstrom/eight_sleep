@@ -1,0 +1,145 @@
+name: sync-and-rebuild-develop
+
+# Keeps the fork current with upstream and rebuilds the `develop` deploy branch
+# as a clean replay of our in-flight deltas on top of upstream/main.
+#
+#   main     - default branch; ALWAYS exactly one commit ahead of upstream/main:
+#              a single fork-overlay commit carrying this CI + the deltas manifest.
+#              Synced by rebasing that overlay onto fresh upstream/main and
+#              force-pushing (NOT merging) so it never accumulates merge commits.
+#              Manual edits to main (manifest, CI) amend that one commit + force-push.
+#   develop  - deploy/integration branch = upstream/main + each feature/* in
+#              .github/develop-deltas.txt, replayed in order. Force-pushed here.
+#              The homeassistant-config monorepo pins a develop SHA as a submodule.
+#   feature/<slug> - one branch per upstream PR, rooted on upstream/main so the
+#              PR diffs cleanly. Rebased onto fresh upstream/main on each run to
+#              keep its PR current.
+#
+# Remove a line from develop-deltas.txt once its upstream PR merges (the change
+# is then already in upstream/main); revise the branch on rejection.
+
+on:
+  schedule:
+    - cron: '0 8 * * 1'   # Mondays 08:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: sync-and-rebuild-develop
+  cancel-in-progress: false
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main (full history)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Configure git + remotes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/lukas-clarke/eight_sleep.git
+          git fetch upstream main
+          git fetch origin
+
+      - name: Sync fork main onto upstream (keep main exactly one commit ahead)
+        run: |
+          # main is upstream/main + exactly one fork-overlay commit. Rebase that
+          # overlay onto the latest upstream/main and force-push, so main tracks
+          # upstream content without ever accumulating merge commits. No-op when
+          # upstream has not advanced.
+          git checkout -B main origin/main
+          if ! git rebase upstream/main; then
+            git rebase --abort || true
+            echo "::error::fork-overlay commit on main conflicts with upstream/main; resolve manually"
+            exit 1
+          fi
+          git push --force-with-lease origin main
+          git fetch origin main
+
+      - name: Rebuild develop = upstream/main + replayed deltas
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          git fetch upstream main
+
+          # Read the ordered delta list from main (the develop tree we build below
+          # intentionally has no CI files, so read it from the main ref directly).
+          MANIFEST="$(git show origin/main:.github/develop-deltas.txt 2>/dev/null || true)"
+
+          git checkout -B develop upstream/main
+
+          FAILED=""
+          while IFS= read -r raw; do
+            br="$(printf '%s' "$raw" | sed 's/#.*//' | xargs || true)"
+            [ -z "$br" ] && continue
+            echo "::group::replaying $br"
+
+            if ! git ls-remote --exit-code --heads origin "$br" >/dev/null 2>&1; then
+              echo "::warning::branch $br listed in develop-deltas.txt but missing on origin; skipping"
+              echo "::endgroup::"
+              continue
+            fi
+
+            git fetch origin "$br"
+            git checkout -B "$br" "origin/$br"
+
+            # Keep the feature branch (and thus its upstream PR) current with upstream.
+            if ! git rebase upstream/main; then
+              git rebase --abort || true
+              FAILED="$FAILED $br"
+              echo "::error::conflict rebasing $br onto upstream/main"
+              git checkout develop
+              echo "::endgroup::"
+              continue
+            fi
+            git push -f origin "$br"
+
+            # Cherry-pick the branch's own commits (everything it adds on top of
+            # upstream/main) onto develop. Each delta is rooted on upstream/main,
+            # not on the prior delta, so a fast-forward merge only works for the
+            # first one; cherry-pick stacks independent deltas in order.
+            git checkout develop
+            if ! git cherry-pick "upstream/main..$br"; then
+              git cherry-pick --abort || true
+              FAILED="$FAILED $br"
+              echo "::error::cannot cherry-pick $br onto develop"
+            fi
+            echo "::endgroup::"
+          done <<< "$MANIFEST"
+
+          git push -f origin develop
+
+          if [ -n "$FAILED" ]; then
+            echo "FAILED_DELTAS=$FAILED" >> "$GITHUB_ENV"
+            exit 1
+          fi
+
+      - name: Open/update tracking issue on conflict
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TITLE="develop rebuild failed: delta replay conflict"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          BODY="The scheduled \`sync-and-rebuild-develop\` run could not cleanly replay one or more deltas onto \`upstream/main\`.
+
+          Failing deltas: \`${FAILED_DELTAS:-unknown}\`
+
+          To fix: rebase the feature branch onto \`upstream/main\` and resolve the conflict, or remove/revise its entry in \`.github/develop-deltas.txt\`. If the upstream PR was rejected, this delta needs a new approach.
+
+          Run: ${RUN_URL}"
+          NUM="$(gh issue list --state open --search "$TITLE in:title" --json number --jq '.[0].number' 2>/dev/null || true)"
+          if [ -n "$NUM" ]; then
+            gh issue comment "$NUM" --body "$BODY"
+          else
+            gh issue create --title "$TITLE" --body "$BODY"
+          fi

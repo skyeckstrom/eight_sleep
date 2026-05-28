@@ -1,0 +1,13 @@
+# Feature branches replayed (in order) onto upstream/main to build `develop`.
+# One entry per in-flight upstream PR. The sync-and-rebuild-develop workflow
+# rebases each onto fresh upstream/main and fast-forwards it into develop.
+#
+# Lifecycle:
+#   - add a line when you open a new feature/<slug> branch + upstream PR
+#   - remove the line once that PR merges (the change is then in upstream/main)
+#   - revise the branch (or remove it) if the PR is rejected
+#
+# Lines starting with # and blank lines are ignored.
+
+feature/speaker-coordinator-probe
+feature/bedtime-schedule-write
