@@ -8,7 +8,7 @@ Licensed under the MIT license.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time as dt_time, timedelta, timezone
 import logging
 import statistics
 from typing import TYPE_CHECKING, Any
@@ -37,6 +37,8 @@ class EightUser:  # pylint: disable=too-many-public-methods
         self.alarms: list[dict[str, Any]] = []
         self.routines: list[dict[str, Any]] = []  # Kept for backward compat, always empty now
         self.smart_schedule: dict[str, Any] | None = None
+        self.bedtime_schedules: list[dict[str, Any]] = []
+        self.next_bedtime: datetime | None = None
         self.next_alarm = None
         self.next_alarm_id = None
         self.snooze_minutes: int = 9
@@ -698,6 +700,9 @@ class EightUser:  # pylint: disable=too-many-public-methods
         # Update temperature data (current temp, smart schedule, etc.)
         await self._update_temperature_data()
 
+        # Update the full bedtime schedules list (Autopilot preconditioning).
+        await self.update_bedtime_schedules()
+
         if self.target_heating_level is None:
             self.target_heating_temp = None
         else:
@@ -725,6 +730,83 @@ class EightUser:  # pylint: disable=too-many-public-methods
         except Exception as e:
             _LOGGER.warning(f"Error fetching temperature data for {self.user_id}: {e}")
 
+    async def update_bedtime_schedules(self) -> None:
+        """Fetch the full list of bedtime schedules (Autopilot preconditioning).
+
+        The /temperature endpoint used by _update_temperature_data only returns
+        the current and next schedule; the full per-day list lives under the
+        top-level "schedules" key of /temperature/all. The PUT to /bedtime
+        replaces this whole list, so callers round-trip from here.
+        """
+        url = APP_API_URL + f"v1/users/{self.user_id}/temperature/all"
+        try:
+            resp = await self.device.api_request("GET", url)
+            if resp and isinstance(resp, dict):
+                self.bedtime_schedules = resp.get("schedules", [])
+                next_ts = resp.get("nextScheduledTimestamp")
+                self.next_bedtime = (
+                    self.device.convert_string_to_datetime(next_ts) if next_ts else None
+                )
+        except Exception as e:
+            _LOGGER.warning(f"Error fetching bedtime schedules for {self.user_id}: {e}")
+
+    @staticmethod
+    def _normalize_bedtime_schedule(schedule: dict[str, Any]) -> dict[str, Any]:
+        """Normalize a schedule dict to the wire shape, preserving unknown fields.
+
+        Only "time" (HH:MM or datetime.time -> HH:MM:SS) and "days" (lowercased
+        weekday names) are normalized. Every other key -- id, enabled, tags,
+        startSettings, and any field the API adds later -- is passed through
+        untouched so a round-tripped schedule is not silently stripped.
+        """
+        out = dict(schedule)
+        time_val = out.get("time")
+        if isinstance(time_val, dt_time):
+            out["time"] = time_val.strftime("%H:%M:%S")
+        elif isinstance(time_val, str) and len(time_val) == 5:
+            out["time"] = f"{time_val}:00"
+        days = out.get("days")
+        if days is not None:
+            out["days"] = [str(day).lower() for day in days]
+        return out
+
+    async def set_bedtime_schedule(
+        self, schedules: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """Replace the user's bedtime schedules (Autopilot preconditioning).
+
+        Eight Sleep migrated bedtime off the old routines API; this PUT to
+        /v1/users/{userId}/bedtime is the replacement. The endpoint replaces the
+        ENTIRE schedules list, so callers must pass the full set they want to
+        keep -- round-trip the current list from bedtime_schedules (populated by
+        update_bedtime_schedules) and mutate the entries they care about.
+
+        Each schedule dict carries (matching the wire shape):
+            id: str | None            -- preserve on update; None creates a new one
+            enabled: bool
+            time: str | datetime.time -- "HH:MM" / "HH:MM:SS" / time, sent as HH:MM:SS
+            days: list[str]           -- weekday names, case-insensitive
+            startSettings: dict       -- e.g. {"bedtime": <-100..100 device level>}
+        Unknown fields (such as "tags") are passed through untouched.
+
+        Returns the parsed PUT response and refreshes bedtime_schedules from it.
+        """
+        body = {
+            "schedules": [
+                self._normalize_bedtime_schedule(schedule) for schedule in schedules
+            ]
+        }
+        url = APP_API_URL + f"v1/users/{self.user_id}/bedtime"
+        resp = await self.device.api_request("PUT", url, data=body)
+        if isinstance(resp, dict):
+            # The PUT response nests schedules under "settings" per the app's
+            # update DTO; fall back to a top-level "schedules" key defensively.
+            updated = resp.get("settings", {}).get("schedules")
+            if updated is None:
+                updated = resp.get("schedules")
+            if updated is not None:
+                self.bedtime_schedules = updated
+        return resp
 
     async def set_bed_side(self, side) -> None:
         side = str(side).lower()

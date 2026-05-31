@@ -1,7 +1,7 @@
 import asyncio
 import unittest
 from unittest.mock import AsyncMock, patch, call # Add 'call' for checking multiple calls
-from datetime import datetime, timedelta, timezone # Import datetime for away_mode test
+from datetime import datetime, time as dt_time, timedelta, timezone # Import datetime for away_mode test
 
 # Assuming similar import structure as test_auth.py
 from custom_components.eight_sleep.pyEight.eight import EightSleep
@@ -130,6 +130,73 @@ class TestEightUser(unittest.IsolatedAsyncioTestCase):
             self.user.side = None
             self.assertEqual(self.user.corrected_side_for_key, "left")
             mock_logger.warning.assert_called_once()
+
+    async def test_set_bedtime_schedule(self):
+        # Response nests the updated list under "settings" (the update DTO shape).
+        self.mock_eight_device.api_request = AsyncMock(return_value={
+            "settings": {"schedules": [{"id": "abc", "enabled": True}]}
+        })
+
+        schedules = [
+            {
+                "id": "abc",
+                "enabled": True,
+                "time": dt_time(22, 30),            # datetime.time -> "22:30:00"
+                "days": ["MONDAY", "Tuesday"],      # mixed case -> lowercased
+                "tags": [],                          # unknown field, must be preserved
+                "startSettings": {"bedtime": -34},
+            }
+        ]
+
+        resp = await self.user.set_bedtime_schedule(schedules)
+
+        expected_url = f"{APP_API_URL}v1/users/{self.user_id}/bedtime"
+        self.mock_eight_device.api_request.assert_called_once_with(
+            "PUT",
+            expected_url,
+            data={
+                "schedules": [
+                    {
+                        "id": "abc",
+                        "enabled": True,
+                        "time": "22:30:00",
+                        "days": ["monday", "tuesday"],
+                        "tags": [],
+                        "startSettings": {"bedtime": -34},
+                    }
+                ]
+            },
+        )
+        # bedtime_schedules refreshed from the parsed response
+        self.assertEqual(self.user.bedtime_schedules, [{"id": "abc", "enabled": True}])
+        self.assertEqual(resp, {"settings": {"schedules": [{"id": "abc", "enabled": True}]}})
+
+    async def test_set_bedtime_schedule_normalizes_short_time(self):
+        self.mock_eight_device.api_request = AsyncMock(return_value={})
+        await self.user.set_bedtime_schedule([{"time": "23:00", "days": ["sunday"]}])
+        sent = self.mock_eight_device.api_request.call_args.kwargs["data"]["schedules"][0]
+        self.assertEqual(sent["time"], "23:00:00")
+
+    async def test_set_bedtime_schedule_response_top_level_schedules(self):
+        # Defensive fallback: some responses carry schedules at the top level.
+        self.mock_eight_device.api_request = AsyncMock(return_value={
+            "schedules": [{"id": "xyz"}]
+        })
+        await self.user.set_bedtime_schedule([{"id": "xyz", "time": "22:00:00"}])
+        self.assertEqual(self.user.bedtime_schedules, [{"id": "xyz"}])
+
+    async def test_update_bedtime_schedules(self):
+        self.mock_eight_device.api_request = AsyncMock(return_value={
+            "schedules": [{"id": "s1", "time": "22:00:00", "days": ["monday"]}],
+            "currentSchedule": {},
+        })
+        await self.user.update_bedtime_schedules()
+        expected_url = f"{APP_API_URL}v1/users/{self.user_id}/temperature/all"
+        self.mock_eight_device.api_request.assert_called_once_with("GET", expected_url)
+        self.assertEqual(
+            self.user.bedtime_schedules,
+            [{"id": "s1", "time": "22:00:00", "days": ["monday"]}],
+        )
 
 
 if __name__ == '__main__':
