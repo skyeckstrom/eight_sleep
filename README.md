@@ -68,6 +68,13 @@ There are a few services you can use on the <..>_bed_temperature entities:
   - Update the bedtime for a routine. Parameters:
     - `routine_id` (required)
     - `bedtime` (required, HH:MM:SS)
+- **Set Bedtime Schedule**
+  - Create or update an Autopilot bedtime schedule (the per-day bedtime preconditioning that replaced the routines API). Targets one schedule and preserves the others. Parameters (all optional):
+    - `schedule_id` — the schedule to update (read it from the `Next Bedtime` sensor's `schedules` attribute). Omit to update the only schedule, or to create a new one when none exist.
+    - `time` (HH:MM:SS) — the bedtime, interpreted as a wall-clock local time (DST-safe).
+    - `days` — list of weekday names (monday … sunday) the schedule repeats on.
+    - `enabled` — enable or disable the schedule.
+    - `bedtime_temperature` (-100 … 100) — the device level applied at bedtime.
 
 <br>
 **Example Service Calls**
@@ -101,6 +108,7 @@ There are a few possible sensor values for each Eight Sleep side. Some ones with
 | Heart Rate              | Side  | Measurement | Yes      |                                                                                                                                                                                                 |
 | HRV                     | Side  | Measurement | Yes      |                                                                                                                                                                                                 |
 | Next Alarm              | Side  | Datetime    | Yes      | The alarm ID is available as an attribute on the sensor.                                                                                                                                        |
+| Next Bedtime            | Side  | Datetime    | Yes      | When the Autopilot bedtime schedule next fires. The full schedules list (each with `id`, `time`, `days`, `enabled`, `bedtime_temperature`) is on the `schedules` attribute; use it to find a `schedule_id` for the Set Bedtime Schedule service. |
 | Presence End            | Side  | Datetime    | Yes      |                                                                                                                                                                                                 |
 | Presence Start          | Side  | Datetime    | Sort Of  | This is continuously updated during an active sleep session                                                                                                                                     |
 | Sleep Fitness Score     | Side  | Measurement | Yes      |                                                                                                                                                                                                 |
@@ -175,6 +183,17 @@ target:
 data:
   routine_id: "d9f1a1e0-1234-5678-90ab-abcdef012345"
   bedtime: "22:30:00"
+```
+
+Example: Move the Autopilot bedtime to 22:30 on weeknights (updates the only schedule, or pass `schedule_id` from the `Next Bedtime` sensor when several exist)
+```yaml path=null start=null
+service: sensor.set_bedtime_schedule
+target:
+  entity_id: sensor.left_bed_temperature
+data:
+  time: "22:30:00"
+  days: [monday, tuesday, wednesday, thursday, friday]
+  bedtime_temperature: -20
 ```
 
 

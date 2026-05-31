@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import time as dt_time, timedelta
 import logging
+from typing import Any
 
 from .pyEight.eight import EightSleep
 from .pyEight.exceptions import RequestError
@@ -427,3 +428,78 @@ class EightSleepBaseEntity(CoordinatorEntity[DataUpdateCoordinator]):
                 thermal_level=thermal_level,
             )
         )
+
+    async def async_set_bedtime_schedule(
+        self,
+        schedule_id: str | None = None,
+        time: dt_time | None = None,
+        days: list[str] | None = None,
+        enabled: bool | None = None,
+        bedtime_temperature: int | None = None,
+    ) -> None:
+        """Create or update one bedtime schedule (Autopilot preconditioning).
+
+        The endpoint replaces the whole schedules list, so this fetches the
+        current schedules, mutates the targeted one in place -- preserving the
+        other schedules and the target's own unknown fields -- and writes the
+        full list back. Target selection: an explicit schedule_id, else the
+        sole schedule when only one exists, else (no schedules) a new one.
+        """
+        if self._user_obj is None:
+            raise HomeAssistantError(
+                "This entity does not support the service call. "
+                "Ensure you have a target <xxx>_bed_temperature entity set as the target."
+            )
+
+        await self._user_obj.update_bedtime_schedules()
+        schedules: list[dict[str, Any]] = [
+            dict(schedule) for schedule in self._user_obj.bedtime_schedules
+        ]
+
+        if schedule_id is not None:
+            target_idx = next(
+                (i for i, s in enumerate(schedules) if s.get("id") == schedule_id), None
+            )
+            if target_idx is None:
+                raise HomeAssistantError(
+                    f"No bedtime schedule with id {schedule_id!r} for this side."
+                )
+        elif len(schedules) == 1:
+            target_idx = 0
+        elif len(schedules) > 1:
+            raise HomeAssistantError(
+                "Multiple bedtime schedules exist; pass schedule_id to pick one "
+                "(see the bedtime schedule sensor's attributes)."
+            )
+        else:
+            target_idx = None  # no schedules: create a new one below
+
+        if target_idx is None:
+            if time is None or not days:
+                raise HomeAssistantError(
+                    "Creating a new bedtime schedule requires both time and days."
+                )
+            schedule: dict[str, Any] = {"id": None, "enabled": True, "startSettings": {}}
+            schedules.append(schedule)
+            target_idx = len(schedules) - 1
+        else:
+            schedule = schedules[target_idx]
+
+        if time is not None:
+            schedule["time"] = time
+        if days is not None:
+            schedule["days"] = days
+        if enabled is not None:
+            schedule["enabled"] = enabled
+        if bedtime_temperature is not None:
+            start = dict(schedule.get("startSettings") or {})
+            start["bedtime"] = bedtime_temperature
+            schedule["startSettings"] = start
+
+        schedules[target_idx] = schedule
+        await self._user_obj.set_bedtime_schedule(schedules)
+
+        config_entry_data: EightSleepConfigEntryData = self.hass.data[DOMAIN][
+            self._config_entry.entry_id
+        ]
+        await config_entry_data.user_coordinator.async_request_refresh()

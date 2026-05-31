@@ -47,6 +47,11 @@ NAME_MAP = {
         device_class=SensorDeviceClass.TIMESTAMP,
         state_class=None
     ),
+    "next_bedtime": NameMapEntity(
+        "Next Bedtime",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        state_class=None
+    ),
     "target_heating_temp": NameMapEntity(
         "Target Temperature",
         "°C",
@@ -67,6 +72,7 @@ SERVICE_AWAY_MODE_START = "away_mode_start"
 SERVICE_AWAY_MODE_STOP = "away_mode_stop"
 SERVICE_REFRESH_DATA = "refresh_data"
 SERVICE_SET_ONE_OFF_ALARM = "set_one_off_alarm"
+SERVICE_SET_BEDTIME_SCHEDULE = "set_bedtime_schedule"
 
 ATTR_TARGET = "target"
 ATTR_DURATION = "duration"
