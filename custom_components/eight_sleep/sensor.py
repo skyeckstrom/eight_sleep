@@ -47,6 +47,7 @@ from .const import (
     NAME_MAP,
     SERVICE_REFRESH_DATA,
     SERVICE_SET_ONE_OFF_ALARM,
+    SERVICE_SET_BEDTIME_SCHEDULE,
 )
 
 ATTR_ROOM_TEMP = "Room Temperature"
@@ -90,6 +91,7 @@ EIGHT_USER_SENSORS = [
     "target_heating_temp",
     "sleep_stage",
     "next_alarm",
+    "next_bedtime",
     "bed_state_type",
     "presence_start",
     "presence_end",
@@ -122,6 +124,25 @@ SERVICE_HEAT_INCREMENT_SCHEMA = {
 VALID_SNOOZE_DURATION = vol.All(vol.Coerce(int), vol.Clamp(min=1, max=1440))
 SERVICE_ALARM_SNOOZE_SCHEMA = {
     ATTR_DURATION: VALID_SNOOZE_DURATION,
+}
+
+WEEKDAY_OPTIONS = [
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+]
+SERVICE_SET_BEDTIME_SCHEDULE_SCHEMA = {
+    vol.Optional("schedule_id"): cv.string,
+    vol.Optional("time"): cv.time,
+    vol.Optional("days"): vol.All(cv.ensure_list, [vol.In(WEEKDAY_OPTIONS)]),
+    vol.Optional("enabled"): cv.boolean,
+    vol.Optional("bedtime_temperature"): vol.All(
+        vol.Coerce(int), vol.Range(min=-100, max=100)
+    ),
 }
 
 
@@ -234,6 +255,11 @@ async def async_setup_entry(
         SERVICE_REFRESH_DATA,
         {},
         "async_refresh_data",
+    )
+    platform.async_register_entity_service(
+        SERVICE_SET_BEDTIME_SCHEDULE,
+        SERVICE_SET_BEDTIME_SCHEDULE_SCHEMA,
+        "async_set_bedtime_schedule",
     )
 
 
@@ -375,6 +401,20 @@ class EightUserSensor(EightSleepBaseEntity, SensorEntity):
                 ATTR_ALARM_ID: self._user_obj.next_alarm_id,
             }
             return state_attr
+        elif "next_bedtime" in self._sensor and self._user_obj:
+            schedules = [
+                {
+                    "id": schedule.get("id"),
+                    "enabled": schedule.get("enabled"),
+                    "time": schedule.get("time"),
+                    "days": schedule.get("days", []),
+                    "bedtime_temperature": (schedule.get("startSettings") or {}).get(
+                        "bedtime"
+                    ),
+                }
+                for schedule in self._user_obj.bedtime_schedules
+            ]
+            return {"schedules": schedules}
         elif self._sensor == "routines" and self._user_obj:
             alarms_data = []
             for alarm in self._user_obj.alarms:

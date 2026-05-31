@@ -146,6 +146,44 @@ set_routine_bedtime:
       selector:
         time:
 
+set_bedtime_schedule:
+  target:
+    entity:
+      integration: eight_sleep
+      domain: sensor
+  fields:
+    schedule_id:
+      required: false
+      selector:
+        text:
+    time:
+      required: false
+      selector:
+        time:
+    days:
+      required: false
+      selector:
+        select:
+          multiple: true
+          options:
+            - monday
+            - tuesday
+            - wednesday
+            - thursday
+            - friday
+            - saturday
+            - sunday
+    enabled:
+      required: false
+      selector:
+        boolean:
+    bedtime_temperature:
+      required: false
+      selector:
+        number:
+          min: -100
+          max: 100
+          unit_of_measurement: "°"
 set_one_off_alarm:
   target:
     entity:
